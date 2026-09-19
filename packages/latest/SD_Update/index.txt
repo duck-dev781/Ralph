@@ -1,3 +1,4 @@
 # Ralph SD update manifest
 # Format: target_path|download_url
-# Add SD files here for future releases. The ESP32 updater can consume this list.
+# Bump SD_VERSION in ../manifest.txt whenever any listed SD file changes.
+/RALPH/AI/RESPONSES.TXT|https://raw.githubusercontent.com/duck-dev781/Ralph/main/AI/RESPONSES.TXT
