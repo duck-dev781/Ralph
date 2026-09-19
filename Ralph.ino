@@ -102,7 +102,47 @@ int compareVersion(String a,String b){a.trim();b.trim();if(a.startsWith("v"))a=a
 bool ensureParentDir(String path){int slash=path.lastIndexOf("/");if(slash<=0)return true;String dir=path.substring(0,slash);if(dir=="/")return true;String cur="";int pos=1;while(pos<=dir.length()){int next=dir.indexOf("/",pos);if(next<0)next=dir.length();cur=dir.substring(0,next);if(cur.length()&&!SD_MMC.exists(cur))SD_MMC.mkdir(cur);pos=next+1;}return true;}
 bool downloadToSD(String target,String url){target=safePath(target);WiFiClientSecure c;c.setInsecure();HTTPClient h;if(!h.begin(c,url)||h.GET()!=200){h.end();return false;}ensureParentDir(target);String tmp=target+".download";SD_MMC.remove(tmp);File out=SD_MMC.open(tmp,FILE_WRITE);if(!out){h.end();return false;}WiFiClient *s=h.getStreamPtr();uint8_t b[2048];int remaining=h.getSize();bool ok=true;while(remaining!=0){int want=sizeof(b);if(remaining>0&&remaining<want)want=remaining;int n=s->readBytes(b,want);if(n<=0){ok=false;break;}if(out.write(b,n)!=(size_t)n){ok=false;break;}if(remaining>0)remaining-=n;}out.close();h.end();if(!ok){SD_MMC.remove(tmp);return false;}SD_MMC.remove(target);return SD_MMC.rename(tmp,target);}
 bool applySDManifest(String url){WiFiClientSecure c;c.setInsecure();HTTPClient h;if(!h.begin(c,url)||h.GET()!=200){h.end();return false;}String body=h.getString();h.end();bool all=true,any=false;int p=0;while(p<body.length()){int e=body.indexOf("\n",p);if(e<0)e=body.length();String l=body.substring(p,e);l.trim();p=e+1;if(!l.length()||l[0]=='#')continue;int sep=l.indexOf("|");if(sep<2)continue;String target=l.substring(0,sep),url2=l.substring(sep+1);target.trim();url2.trim();if(target.length()&&url2.length()){any=true;if(!downloadToSD(target,url2))all=false;}}return any&&all;}
-void checkGitHubUpdate(){if(!wifiOK)return;WiFiClientSecure client;client.setInsecure();HTTPClient h;if(!h.begin(client,UPDATE_MANIFEST))return;int code=h.GET();if(code!=200){h.end();return;}String body=h.getString(),fwVer,sdVer,fw,sdm;parseManifest(body,"FIRMWARE_VERSION",fwVer);parseManifest(body,"SD_VERSION",sdVer);parseManifest(body,"FIRMWARE",fw);parseManifest(body,"SD_MANIFEST",sdm);h.end();bool sdNew=sdVer.length()&&compareVersion(sdVer,cfg.sdVersion)>0;bool fwNew=fwVer.length()&&compareVersion(fwVer,cfg.firmwareVersion)>0;if(sdNew&&sdm.length()){if(applySDManifest(sdm)){cfg.sdVersion=sdVer;save();}}if(fwNew&&fw.length()){WiFiClientSecure fc;fc.setInsecure();HTTPClient f;if(f.begin(fc,fw)&&f.GET()==200){int len=f.getSize();if(Update.begin(len>0?len:UPDATE_SIZE_UNKNOWN)){size_t written=Update.writeStream(f.getStream());bool ok=Update.end(true)&&Update.isFinished()&&(len<=0||(int)written==len);if(ok){cfg.firmwareVersion=fwVer;save();f.end();delay(700);ESP.restart();}else Update.abort();}}f.end();}}}
+void checkGitHubUpdate(){
+  if(!wifiOK)return;
+  WiFiClientSecure client; client.setInsecure();
+  HTTPClient h;
+  if(!h.begin(client,UPDATE_MANIFEST))return;
+  int code=h.GET();
+  if(code!=200){h.end();return;}
+  String body=h.getString(),fwVer,sdVer,fw,sdm;
+  parseManifest(body,"FIRMWARE_VERSION",fwVer);
+  parseManifest(body,"SD_VERSION",sdVer);
+  parseManifest(body,"FIRMWARE",fw);
+  parseManifest(body,"SD_MANIFEST",sdm);
+  h.end();
+  bool sdNew=sdVer.length()&&compareVersion(sdVer,cfg.sdVersion)>0;
+  bool fwNew=fwVer.length()&&compareVersion(fwVer,cfg.firmwareVersion)>0;
+  if(sdNew&&sdm.length()){
+    if(applySDManifest(sdm)){cfg.sdVersion=sdVer;save();}
+  }
+  if(fwNew&&fw.length()){
+    WiFiClientSecure fc; fc.setInsecure();
+    HTTPClient f;
+    if(f.begin(fc,fw)&&f.GET()==200){
+      int len=f.getSize();
+      if(Update.begin(len>0?len:UPDATE_SIZE_UNKNOWN)){
+        size_t written=Update.writeStream(f.getStream());
+        bool ok=Update.end(true)&&Update.isFinished()&&(len<=0||(int)written==len);
+        if(ok){
+          cfg.firmwareVersion=fwVer;
+          save();
+          f.end();
+          delay(700);
+          ESP.restart();
+        }else{
+          Update.abort();
+        }
+      }
+    }
+    f.end();
+  }
+}
+
 class SC:public BLEServerCallbacks{void onConnect(BLEServer*){bleConnected=true;}void onDisconnect(BLEServer*s){bleConnected=false;s->getAdvertising()->start();}};
 class RC:public BLECharacteristicCallbacks{void onWrite(BLECharacteristic*c){String v=c->getValue();if(v.length())command(v);}};
 
@@ -371,4 +411,6 @@ void anim(){
 }
 
 void setup(){Serial.begin(115200);pinMode(BRAKE_LED_PIN,OUTPUT);setBrake(false);lcd.init();lcd.backlight();for(int i=0;i<8;i++)lcd.createChar(i,(uint8_t*)RALPH_CHARS[i]);screen("RALPH","booting...");sdOK=SD_MMC.begin("/sdcard",true);if(sdOK){SD_MMC.mkdir("/RALPH");SD_MMC.mkdir("/RALPH/AI");load();}if(!cfg.key.length()){cfg.key=makeKey();save();}if(!cfg.deviceId.length()){cfg.deviceId=makeDeviceId();save();}mpuOK=initMPU();lastMove=millis();ble();temp();connectWiFi();startWeb();if(!cfg.complete){state=SETUP_MODE;setBrake(false);screen("SETUP KEY",cfg.key);}else{state=AWAKE;setBrake(true);screen("Hi! I'm Ralph",cfg.house);}}
-void periodicUpdateCheck(){if(wifiOK&&millis()-lastUpdateCheck>=UPDATE_CHECK_MS){lastUpdateCheck=millis();checkGitHubUpdate();}}\n\nvoid loop(){mpu();temp();if(wifiOK)web.handleClient();periodicUpdateCheck();if(cfg.complete&&state!=SLEEPING&&millis()-lastMove>=SLEEP_AFTER_MS){state=SLEEPING;setBrake(false);}if(state==FALLEN&&az>.65&&fabs(ax)<.65&&fabs(ay)<.65){state=WAKING;stateUntil=millis()+1800;setBrake(true);}if(millis()-lastMove>1000)shake*=.92f;anim();delay(5);}
+void periodicUpdateCheck(){if(wifiOK&&millis()-lastUpdateCheck>=UPDATE_CHECK_MS){lastUpdateCheck=millis();checkGitHubUpdate();}}
+
+void loop(){mpu();temp();if(wifiOK)web.handleClient();periodicUpdateCheck();if(cfg.complete&&state!=SLEEPING&&millis()-lastMove>=SLEEP_AFTER_MS){state=SLEEPING;setBrake(false);}if(state==FALLEN&&az>.65&&fabs(ax)<.65&&fabs(ay)<.65){state=WAKING;stateUntil=millis()+1800;setBrake(true);}if(millis()-lastMove>1000)shake*=.92f;anim();delay(5);}
