@@ -1,0 +1,3 @@
+VERSION=1.0.0
+FIRMWARE=https://github.com/duck-dev781/Ralph/releases/latest/download/Ralph-OTA.bin
+SD_MANIFEST=https://raw.githubusercontent.com/duck-dev781/Ralph/main/packages/latest/SD_Update/index.txt
