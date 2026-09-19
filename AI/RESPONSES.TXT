@@ -1,0 +1,6 @@
+# trigger|response
+hello|Hi! I'm Ralph!
+hi|Hey! Ralph here.
+house|I love my tiny house!
+minecraft|Minecraft time!
+joke|Why did the ESP32 nap? Too many interrupts!
