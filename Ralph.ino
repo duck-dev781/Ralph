@@ -67,24 +67,256 @@ class RC:public BLECharacteristicCallbacks{void onWrite(BLECharacteristic*c){std
 
 void ble(){BLEDevice::init("Ralph-ESP32");BLEServer*s=BLEDevice::createServer();s->setCallbacks(new SC());BLEService*sv=s->createService("7f6c0001-9f42-4e9b-8d11-72616c706800");auto*rx=sv->createCharacteristic("7f6c0002-9f42-4e9b-8d11-72616c706800",BLECharacteristic::PROPERTY_WRITE|BLECharacteristic::PROPERTY_WRITE_NR);rx->setCallbacks(new RC());tx=sv->createCharacteristic("7f6c0003-9f42-4e9b-8d11-72616c706800",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_NOTIFY);tx->addDescriptor(new BLE2902());sv->start();s->getAdvertising()->start();}
 
-void drawAnimation(uint8_t id,uint8_t f){screen(String(RALPH_ANIMATIONS[id][f]));}
+
+// ---------- REAL 5x8 PIXEL-ART ANIMATION ENGINE ----------
+// The LCD has only 8 custom-character slots, so Ralph rebuilds those
+// 8 tiles for every frame. Nothing below prints animation names.
+uint8_t px[8][8];
+
+void clearPx(){for(uint8_t i=0;i<8;i++)for(uint8_t y=0;y<8;y++)px[i][y]=0;}
+void putPx(uint8_t ch,uint8_t x,uint8_t y){if(ch<8&&x<5&&y<8)px[ch][y]|=(1<<x);}
+void makeRalphTiles(uint8_t id,uint8_t f){
+  clearPx();
+  bool blink=false, wink=false, smile=false, frown=false, openMouth=false;
+  bool armL=false,armR=false,legsWide=false,up=false,down=false;
+  bool dizzy=false,scared=false,angry=false,sleep=false;
+  switch(id){
+    case 0: blink=(f==1); break;
+    case 1: wink=(f==1); break;
+    case 2: wink=(f==2); break;
+    case 3: smile=true; break;
+    case 4: frown=true; break;
+    case 5: openMouth=true; break;
+    case 6: sleep=true;break;
+    case 7: openMouth=(f!=1);break;
+    case 8: armR=(f==1);break;
+    case 9: up=(f==1);break;
+    case 10: dizzy=true;break;
+    case 11: armL=(f==1);break;
+    case 12: down=true;break;
+    case 13: armL=true;break;
+    case 14: armR=true;break;
+    case 15: legsWide=(f==1);break;
+    case 16: legsWide=(f==2);break;
+    case 17: armL=armR=(f==1);break;
+    case 18: down=true;legsWide=true;break;
+    case 19: up=true;break;
+    case 20: up=(f==1);legsWide=true;break;
+    case 21: up=true;openMouth=true;break;
+    case 22: up=(f!=1);break;
+    case 23: armL=(f!=1);armR=(f==1);break;
+    case 24: armL=(f==0);armR=(f==2);break;
+    case 25: armL=armR=true;up=true;break;
+    case 26: armL=true;break;
+    case 27: wink=true;break;
+    case 28: scared=true;break;
+    case 29: smile=true;openMouth=true;break;
+    case 30: sleep=true;break;
+    case 31: smile=true;openMouth=true;break;
+    case 32: frown=true;break;
+    case 33: angry=true;frown=true;break;
+    case 34: smile=true;break;
+    case 35: smile=true;armL=armR=true;break;
+    case 36: wink=true;armL=true;break;
+    case 37: scared=true;armL=armR=true;break;
+    case 38: sleep=true;break;
+    case 39: sleep=(f!=2);up=(f==2);break;
+    case 40: down=true;frown=true;break;
+    case 41: up=true;smile=true;break;
+    case 42: armL=true;break;
+    case 43: armR=true;break;
+    case 44: armL=true;break;
+    case 45: armR=true;break;
+    case 46: dizzy=true;break;
+    case 47: dizzy=true;break;
+    case 48: armL=armR=(f!=1);break;
+    case 49: armL=armR=true;angry=true;break;
+    default: smile=true;
+  }
+
+  // Head/face: tiles 0/2 are the two halves of Ralph's head.
+  // Body/legs: tiles 1/3 are the two halves below it.
+  // Each tile is genuine 5x8 LCD pixel art.
+  // Head outline + ears/hair.
+  for(uint8_t y=0;y<3;y++){putPx(0,0,y+2);putPx(0,4,y+2);putPx(2,0,y+2);putPx(2,4,y+2);}
+  putPx(0,1,1);putPx(0,2,0);putPx(0,3,1);
+  putPx(2,1,1);putPx(2,2,0);putPx(2,3,1);
+  if(blink){putPx(0,1,4);putPx(0,3,4);putPx(2,1,4);putPx(2,3,4);}
+  else if(wink){putPx(0,1,3);putPx(0,3,4);putPx(2,1,4);putPx(2,3,3);}
+  else if(dizzy){putPx(0,1,(f==0?3:4));putPx(0,3,(f==1?3:4));putPx(2,1,4);putPx(2,3,3);}
+  else if(scared){putPx(0,1,3);putPx(0,3,3);putPx(2,1,3);putPx(2,3,3);}
+  else {putPx(0,1,3);putPx(0,3,3);putPx(2,1,3);putPx(2,3,3);}
+  if(smile){putPx(0,2,5);putPx(2,1,5);putPx(2,2,6);putPx(2,3,5);}
+  else if(frown||angry){putPx(0,2,6);putPx(2,1,6);putPx(2,2,5);putPx(2,3,6);}
+  else if(openMouth){putPx(0,2,5);putPx(2,1,6);putPx(2,2,6);putPx(2,3,6);}
+  else {putPx(0,2,5);putPx(2,1,5);putPx(2,2,5);putPx(2,3,5);}
+
+  // Body, arms and legs.
+  putPx(1,1,0);putPx(1,2,0);putPx(1,3,0);
+  putPx(1,0,1);putPx(1,4,1);putPx(3,0,1);putPx(3,4,1);
+  putPx(1,1,1);putPx(1,2,1);putPx(1,3,1);putPx(3,1,1);putPx(3,2,1);putPx(3,3,1);
+  if(armL){putPx(1,0,2);putPx(1,0,3);} else {putPx(1,0,4);}
+  if(armR){putPx(3,4,2);putPx(3,4,3);} else {putPx(3,4,4);}
+  putPx(1,1,5);putPx(1,3,5);putPx(3,1,5);putPx(3,3,5);
+  if(legsWide){putPx(1,0,7);putPx(3,4,7);putPx(1,1,6);putPx(3,3,6);}
+  else {putPx(1,2,7);putPx(3,2,7);}
+  if(up){putPx(1,2,6);putPx(3,2,6);}
+  if(down){putPx(1,2,2);putPx(3,2,2);}
+}
+
+void makeHouseTiles(uint8_t id,uint8_t f){
+  // Tiles 4/5 = roof, 6 = wall/window, 7 = door.
+  for(uint8_t i=4;i<8;i++)for(uint8_t y=0;y<8;y++)px[i][y]=0;
+  bool roofUp=false,roofWig=false,doorOpen=false,window=false,flash=false;
+  bool houseShake=false,houseTiltL=false,houseTiltR=false;
+  switch(id){
+    case 50: roofUp=(f==1);break;
+    case 51: houseTiltL=(f==1);houseTiltR=(f==2);break;
+    case 52: houseTiltR=(f==1);houseTiltL=(f==2);break;
+    case 53: doorOpen=(f!=1);break;
+    case 54: doorOpen=(f==1);break;
+    case 55: window=(f!=1);break;
+    case 56: window=(f==1);break;
+    case 57: roofUp=true;break;
+    case 58: roofWig=true;break;
+    case 59: break;
+    case 60: break;
+    case 61: houseShake=true;break;
+    case 62: roofUp=true;houseShake=true;break;
+    case 63: roofUp=(f!=1);break;
+    case 64: roofUp=(f==0);break;
+    case 65: houseTiltL=true;break;
+    case 66: houseTiltR=true;break;
+    case 67: flash=(f==1);break;
+    case 68: window=(f!=1);break;
+    default: window=true;
+  }
+  // Roof pixels.
+  for(uint8_t x=0;x<5;x++){putPx(4,x,7);putPx(5,x,7);}
+  putPx(4,2,5);putPx(4,1,6);putPx(4,3,6);
+  putPx(5,2,5);putPx(5,1,6);putPx(5,3,6);
+  if(roofUp){putPx(4,2,3);putPx(5,2,3);}
+  if(roofWig){putPx(4,1,5);putPx(5,3,5);}
+  // Wall/window.
+  for(uint8_t x=0;x<5;x++){putPx(6,x,0);putPx(6,x,1);putPx(6,x,2);putPx(6,x,6);putPx(6,x,7);}
+  putPx(6,0,3);putPx(6,4,3);putPx(6,0,4);putPx(6,4,4);putPx(6,0,5);putPx(6,4,5);
+  if(window){putPx(6,1,3);putPx(6,2,3);putPx(6,3,3);putPx(6,1,4);putPx(6,2,4);putPx(6,3,4);}
+  if(flash){for(uint8_t y=2;y<6;y++)putPx(6,2,y);}
+  // Door.
+  for(uint8_t y=0;y<8;y++)putPx(7,1,y);
+  putPx(7,2,0);putPx(7,3,0);putPx(7,2,1);putPx(7,3,1);
+  if(doorOpen){putPx(7,0,2);putPx(7,0,3);putPx(7,0,4);putPx(7,0,5);}
+  else {putPx(7,3,3);putPx(7,3,4);}
+  if(houseShake){putPx(6,(f==0?0:4),2);}
+  if(houseTiltL){putPx(4,0,4);putPx(5,0,4);}
+  if(houseTiltR){putPx(4,4,4);putPx(5,4,4);}
+}
+
+void uploadTiles(){
+  for(uint8_t i=0;i<8;i++)lcd.createChar(i,px[i]);
+}
+
+void drawPixelAnimation(uint8_t id,uint8_t f){
+  makeRalphTiles(id,f);
+  makeHouseTiles(id,f);
+  uploadTiles();
+
+  uint8_t grid[2][16];
+  for(uint8_t y=0;y<2;y++)for(uint8_t x=0;x<16;x++)grid[y][x]=32;
+
+  int8_t rx=1, hy=9;
+  bool houseVisible=true;
+  bool ralphVisible=true;
+  int8_t bob=0;
+
+  // Movement/pose offsets. Every animation still uses the actual pixel sprites.
+  if(id==15)rx=1-(int8_t)f;
+  if(id==16)rx=1+(int8_t)f;
+  if(id==17)rx=3;
+  if(id==20||id==21||id==22)bob=(f==1?-1:0);
+  if(id==40){bob=(f==0?1:2);rx=3;}
+  if(id==42)rx=2+(int8_t)f;
+  if(id==43)rx=1+(int8_t)(2-f);
+  if(id==44)rx=1;
+  if(id==45)rx=1;
+  if(id==46||id==47)rx=2;
+  if(id==48)rx=1+(int8_t)f;
+  if(id==69)rx=7;
+  if(id==70)rx=6;
+  if(id==71)rx=1;
+  if(id==72)rx=9;
+  if(id==73)rx=8;
+  if(id==74||id==75)rx=6;
+  if(id>=76)rx=5;
+
+  // 2x2 Ralph sprite, two 5x8 tiles per LCD row.
+  if(ralphVisible && rx>=0 && rx<=12){
+    grid[0][rx]=0; grid[0][rx+1]=2;
+    grid[1][rx]=1; grid[1][rx+1]=3;
+  }
+
+  // 4x2 house sprite.
+  if(houseVisible){
+    int8_t hx=hy;
+    if(id==51)hx=hy-((f==1)?1:0)+((f==2)?1:0);
+    if(id==52)hx=hy+((f==1)?1:0)-((f==2)?1:0);
+    if(id==61)hx=hy+((f==0)?0:(f==1?1:-1));
+    if(id==62)hx=hy+((f==0)?0:(f==1?1:-1));
+    if(id==63)hx=hy; if(id==64)hx=hy;
+    if(hx>=0 && hx<=12){
+      grid[0][hx]=4; grid[0][hx+1]=5;
+      grid[1][hx]=6; grid[1][hx+1]=7;
+    }
+  }
+
+  // Some animations deliberately hide/move Ralph to make the house interaction visible.
+  if(id==12||id==67){grid[0][rx]=32;grid[0][rx+1]=32;grid[1][rx]=32;grid[1][rx+1]=32;}
+  if(id==68){grid[0][rx]=32;grid[0][rx+1]=32;grid[1][rx]=32;grid[1][rx+1]=32;}
+  if(id==59||id==60){/* house-only animations */}
+  if(id==62){/* house jump */}
+  if(id==63){/* house jump */}
+  if(id==72){/* Ralph is on the roof */}
+
+  lcd.clear();
+  for(uint8_t y=0;y<2;y++){
+    lcd.setCursor(0,y);
+    for(uint8_t x=0;x<16;x++)lcd.write(grid[y][x]);
+  }
+}
+
 void anim(){
-if(!cfg.complete||state==SETUP_MODE){if(millis()-lastFrame>500){lastFrame=millis();screen("Ralph setup",cfg.key);}return;}
-if(state==SLEEPING){if(millis()-lastFrame>1000){lastFrame=millis();screen("      zZz","    sleep...");}return;}
-if(millis()-lastFrame<300)return;
-lastFrame=millis();
-frame=(frame+1)%3;
-if(state==DIZZY){drawAnimation(46,frame);}
-else if(state==FALLEN){drawAnimation(40,frame);}
-else if(state==WAKING){drawAnimation(39,frame);}
-else if(state==TALKING){drawAnimation(8,frame);}
-else {
-static uint8_t idleAnim=0;
-static uint32_t nextAnim=0;
-if(millis()>=nextAnim){idleAnim=esp_random()%RALPH_ANIMATION_COUNT;nextAnim=millis()+4500;}
-drawAnimation(idleAnim,frame);
+  if(!cfg.complete||state==SETUP_MODE){
+    if(millis()-lastFrame>500){lastFrame=millis();screen("SETUP KEY",cfg.key);}
+    return;
+  }
+  if(state==SLEEPING){
+    if(millis()-lastFrame>700){
+      lastFrame=millis();
+      drawPixelAnimation(59,frame++%3);
+    }
+    return;
+  }
+  if(millis()-lastFrame<260)return;
+  lastFrame=millis();
+  frame=(frame+1)%3;
+
+  if(state==DIZZY)drawPixelAnimation(46,frame);
+  else if(state==FALLEN)drawPixelAnimation(40,frame);
+  else if(state==WAKING)drawPixelAnimation(39,frame);
+  else if(state==TALKING)drawPixelAnimation(8,frame);
+  else{
+    static uint8_t idleAnim=0;
+    static uint32_t nextAnim=0;
+    if(millis()>=nextAnim){
+      idleAnim=esp_random()%RALPH_ANIMATION_COUNT;
+      nextAnim=millis()+4500;
+    }
+    drawPixelAnimation(idleAnim,frame);
+  }
+  if((state==DIZZY||state==FALLEN||state==WAKING||state==TALKING)&&millis()>=stateUntil){
+    state=AWAKE;brake(true);
+  }
 }
-if((state==DIZZY||state==FALLEN||state==WAKING||state==TALKING)&&millis()>=stateUntil){state=AWAKE;brake(true);}
-}
+
 void setup(){Serial.begin(115200);pinMode(BRAKE_LED_PIN,OUTPUT);brake(false);lcd.init();lcd.backlight();for(int i=0;i<8;i++)lcd.createChar(i,(uint8_t*)RALPH_CHARS[i]);screen("RALPH","booting...");sdOK=SD_MMC.begin("/sdcard",true);if(sdOK){SD_MMC.mkdir("/RALPH");SD_MMC.mkdir("/RALPH/AI");load();}if(!cfg.key.length()){cfg.key=makeKey();save();}mpuOK=initMPU();lastMove=millis();ble();temp();if(!cfg.complete){state=SETUP_MODE;brake(false);screen("SETUP KEY",cfg.key);}else{state=AWAKE;brake(true);screen("Hi! I'm Ralph",cfg.house);}}
 void loop(){mpu();temp();if(cfg.complete&&state!=SLEEPING&&millis()-lastMove>=SLEEP_AFTER_MS){state=SLEEPING;brake(false);}if(state==FALLEN&&az>.65&&fabs(ax)<.65&&fabs(ay)<.65){state=WAKING;stateUntil=millis()+1800;brake(true);}if(millis()-lastMove>1000)shake*=.92f;anim();delay(5);}
