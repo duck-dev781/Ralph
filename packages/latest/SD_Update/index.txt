@@ -1,0 +1,3 @@
+# Ralph SD update manifest
+# Format: target_path|download_url
+# Add SD files here for future releases. The ESP32 updater can consume this list.
