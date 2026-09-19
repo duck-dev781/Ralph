@@ -7,6 +7,12 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <math.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <Update.h>
+#include <ESPmDNS.h>
 #include "characters.h"
 
 static constexpr uint8_t LCD_ADDR=0x27, MPU_ADDR=0x68;
@@ -16,6 +22,11 @@ static constexpr float WAKE_DELTA=0.12f, HARD_SHAKE=1.65f, UPSIDE=0.72f;
 
 LiquidCrystal_I2C lcd(LCD_ADDR,16,2);
 BLECharacteristic* tx=nullptr;
+WebServer web(80);
+bool wifiOK=false,webStarted=false;
+uint32_t lastUpdateCheck=0;
+static constexpr uint32_t UPDATE_CHECK_MS=6UL*60UL*60UL*1000UL;
+static const char* UPDATE_MANIFEST="https://raw.githubusercontent.com/duck-dev781/Ralph/main/packages/latest/manifest.txt";
 bool sdOK=false, mpuOK=false, bleConnected=false, brake=true;
 float ax=0,ay=0,az=0,lastMag=1,shake=0,tempF=0;
 uint32_t lastMove=0,lastFrame=0,lastTemp=0,stateUntil=0;
@@ -26,7 +37,9 @@ State state=SETUP_MODE;
 
 struct Settings {
   String name="Ralph", owner="", house="Tiny House", personality="grumpy", key="";
-  bool complete=false;
+  String wifiSSID="", wifiPass="", deviceId="";
+  String updateChannel="stable", installedVersion="1.0.0";
+  bool complete=false, registered=false, wifiEnabled=false;
 } cfg;
 
 void line(uint8_t r,String s){if(s.length()>16)s=s.substring(0,16);while(s.length()<16)s+=' ';lcd.setCursor(0,r);lcd.print(s);}
@@ -37,9 +50,12 @@ void writeFile(const char*p,const String&s){if(!sdOK)return;File f=SD_MMC.open(p
 void appendFile(const char*p,const String&s){if(!sdOK)return;File f=SD_MMC.open(p,FILE_APPEND);if(f){f.println(s);f.close();}}
 String setting(String k){String d=readFile("/RALPH/SETTINGS.TXT");int p=0;while(p<d.length()){int e=d.indexOf('
 ',p);if(e<0)e=d.length();String l=d.substring(p,e);l.trim();int q=l.indexOf('=');if(q>0&&l.substring(0,q)==k)return l.substring(q+1);p=e+1;}return "";}
-void save(){if(!sdOK)return;String s="name="+cfg.name+"\nowner="+cfg.owner+"\nhouse="+cfg.house+"\npersonality="+cfg.personality+"\ncomplete="+String(cfg.complete?1:0)+"\nkey="+cfg.key+"\n";writeFile("/RALPH/SETTINGS.TXT",s);}
-void load(){if(!sdOK||!SD_MMC.exists("/RALPH/SETTINGS.TXT"))return;String v;v=setting("name");if(v.length())cfg.name=v;cfg.owner=setting("owner");v=setting("house");if(v.length())cfg.house=v;v=setting("personality");if(v.length())cfg.personality=v;cfg.complete=setting("complete")=="1";cfg.key=setting("key");}
+void save(){if(!sdOK)return;String s="name="+cfg.name+"\nowner="+cfg.owner+"\nhouse="+cfg.house+"\npersonality="+cfg.personality+"\n";s+="complete="+String(cfg.complete?1:0)+"\nkey="+cfg.key+"\n";s+="wifiSSID="+cfg.wifiSSID+"\nwifiPass="+cfg.wifiPass+"\ndeviceId="+cfg.deviceId+"\n";s+="registered="+String(cfg.registered?1:0)+"\nwifiEnabled="+String(cfg.wifiEnabled?1:0)+"\n";s+="updateChannel="+cfg.updateChannel+"\ninstalledVersion="+cfg.installedVersion+"\n";writeFile("/RALPH/SETTINGS.TXT",s);}
+void load(){if(!sdOK||!SD_MMC.exists("/RALPH/SETTINGS.TXT"))return;String v;v=setting("name");if(v.length())cfg.name=v;cfg.owner=setting("owner");v=setting("house");if(v.length())cfg.house=v;v=setting("personality");if(v.length())cfg.personality=v;cfg.complete=setting("complete")=="1";cfg.key=setting("key");cfg.wifiSSID=setting("wifiSSID");cfg.wifiPass=setting("wifiPass");cfg.deviceId=setting("deviceId");cfg.registered=setting("registered")=="1";cfg.wifiEnabled=setting("wifiEnabled")=="1";v=setting("updateChannel");if(v.length())cfg.updateChannel=v;v=setting("installedVersion");if(v.length())cfg.installedVersion=v;}
 String makeKey(){const char a[]="ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";String k;uint32_t x=esp_random();for(int i=0;i<12;i++){x=x*1664525UL+1013904223UL;k+=a[x%(sizeof(a)-1)];}return k;}
+String makeDeviceId(){uint32_t a=esp_random(),b=esp_random();char s[25];snprintf(s,sizeof(s),"RALPH-%08lX-%08lX",(unsigned long)a,(unsigned long)b);return String(s);}
+int versionNumber(String v){v.replace("v","");v.replace(".","");return v.toInt();}
+bool webAuth(){if(!cfg.complete)return false;if(web.authenticate("ralph",cfg.key.c_str()))return true;web.requestAuthentication();return false;}
 
 void mw(uint8_t r,uint8_t v){Wire.beginTransmission(MPU_ADDR);Wire.write(r);Wire.write(v);Wire.endTransmission();}
 bool mraw(int16_t&x,int16_t&y,int16_t&z){Wire.beginTransmission(MPU_ADDR);Wire.write(0x3B);if(Wire.endTransmission(false))return false;if(Wire.requestFrom(MPU_ADDR,(uint8_t)6)!=6)return false;x=(Wire.read()<<8)|Wire.read();y=(Wire.read()<<8)|Wire.read();z=(Wire.read()<<8)|Wire.read();return true;}
@@ -53,6 +69,7 @@ String chat(String q){String p=lower(q),a;if(p.indexOf("temp")>=0)a="My chip is 
 void reply(String s){if(!tx)return;tx->setValue(s.c_str());tx->notify();}
 bool setupKey(String s){return cfg.key.length()&&s==cfg.key;}
 void command(String c){c.trim();if(!cfg.complete){if(c=="KEY"){reply("SETUP KEY: "+cfg.key);return;}if(c.startsWith("SETUP ")){if(setupKey(c.substring(6))){cfg.complete=true;save();state=AWAKE;brake(true);reply("SETUP OK - Ralph ready.");screen("SETUP COMPLETE","Hi! I'm Ralph");}else reply("BAD KEY");}else reply("SETUP REQUIRED: SETUP <key>");return;}
+if(c.startsWith("WIFI_SSID ")){cfg.wifiSSID=c.substring(10);cfg.wifiSSID.trim();cfg.wifiEnabled=true;save();connectWiFi();reply("WIFI SSID SAVED");return;}if(c.startsWith("WIFI_PASS ")){cfg.wifiPass=c.substring(10);cfg.wifiPass.trim();cfg.wifiEnabled=true;save();connectWiFi();reply("WIFI PASSWORD SAVED");return;}if(c=="WIFI_ON"){cfg.wifiEnabled=true;save();connectWiFi();reply(wifiOK?"WIFI CONNECTED":"WIFI FAILED");return;}if(c=="WIFI_OFF"){cfg.wifiEnabled=false;WiFi.disconnect(true);wifiOK=false;save();reply("WIFI OFF");return;}if(c=="WIFI_STATUS"){reply("wifi="+String(wifiOK?"connected":"offline")+" ip="+(wifiOK?WiFi.localIP().toString():"none"));return;}if(c=="DEVICE_ID"){reply("DEVICE ID: "+cfg.deviceId);return;}if(c=="UPDATE"){checkGitHubUpdate();reply("UPDATE CHECKED");return;}
 if(c.startsWith("NAME ")){cfg.name=c.substring(5);cfg.name.trim();save();reply("NAME SAVED");return;}
 if(c.startsWith("OWNER ")){cfg.owner=c.substring(6);cfg.owner.trim();save();reply("OWNER SAVED");return;}
 if(c.startsWith("HOUSE ")){cfg.house=c.substring(6);cfg.house.trim();save();reply("HOUSE SAVED");return;}
@@ -62,6 +79,28 @@ if(c=="STATUS"){reply("tempF="+String(tempF,1)+" mpu="+String(mpuOK?"ok":"missin
 if(c=="RESETSETUP"){cfg.complete=false;save();state=SETUP_MODE;brake(false);reply("SETUP RESET");return;}
 if(c.startsWith("CHAT "))c=c.substring(5);reply(chat(c));}
 
+// ---------- WIFI + LOCAL WEB FILE MANAGER + OTA ----------
+void connectWiFi(){wifiOK=false;if(!cfg.wifiEnabled||!cfg.wifiSSID.length())return;WiFi.mode(WIFI_STA);WiFi.setHostname("ralph");WiFi.begin(cfg.wifiSSID.c_str(),cfg.wifiPass.c_str());uint32_t t=millis();while(WiFi.status()!=WL_CONNECTED&&millis()-t<12000)delay(100);wifiOK=WiFi.status()==WL_CONNECTED;if(wifiOK){MDNS.begin("ralph");Serial.print("Ralph WiFi: ");Serial.println(WiFi.localIP());}}
+String jsonEscape(String s){s.replace("\\","\\\\");s.replace("\"","\\\"");s.replace("\n","\\n");s.replace("\r","");return s;}
+String safePath(String p){if(!p.startsWith("/"))p="/"+p;while(p.indexOf("//")>=0)p.replace("//","/");while(p.indexOf("..")>=0)p.replace("..","");return p;}
+void apiStatus(){if(!webAuth())return;String j="{\"name\":\""+jsonEscape(cfg.name)+"\",\"deviceId\":\""+cfg.deviceId+"\",\"registered\":"+String(cfg.registered?"true":"false")+",\"wifi\":"+String(wifiOK?"true":"false")+",\"ssid\":\""+jsonEscape(cfg.wifiSSID)+"\",\"ip\":\""+(wifiOK?WiFi.localIP().toString():"")+"\",\"version\":\""+cfg.installedVersion+"\",\"channel\":\""+cfg.updateChannel+"\",\"sd\":"+String(sdOK?"true":"false")+"}";web.send(200,"application/json",j);}
+void apiFiles(){if(!webAuth())return;String p=safePath(web.hasArg("path")?web.arg("path"):"/");File dir=SD_MMC.open(p);if(!dir||!dir.isDirectory()){web.send(404,"text/plain","Not a directory");return;}String j="[";File f=dir.openNextFile();bool first=true;while(f){if(!first)j+=",";j+="{\"name\":\""+jsonEscape(String(f.name()))+"\",\"size\":"+String((unsigned long)f.size())+",\"dir\":"+String(f.isDirectory()?"true":"false")+"}";first=false;f=f.openNextFile();}j+="]";web.send(200,"application/json",j);}
+void apiDownload(){if(!webAuth())return;String p=safePath(web.hasArg("path")?web.arg("path"):"/");if(!SD_MMC.exists(p)){web.send(404,"text/plain","Missing");return;}File f=SD_MMC.open(p,"r");if(!f||f.isDirectory()){web.send(400,"text/plain","Not a file");return;}web.streamFile(f,"application/octet-stream");f.close();}
+void apiDelete(){if(!webAuth())return;String p=safePath(web.arg("path"));if(p=="/"){web.send(400,"text/plain","No");return;}bool ok=SD_MMC.remove(p);if(!ok)ok=SD_MMC.rmdir(p);web.send(ok?200:404,"text/plain",ok?"deleted":"delete failed");}
+void apiMove(){if(!webAuth())return;bool ok=SD_MMC.rename(safePath(web.arg("from")),safePath(web.arg("to")));web.send(ok?200:400,"text/plain",ok?"moved":"move failed");}
+void apiMkdir(){if(!webAuth())return;bool ok=SD_MMC.mkdir(safePath(web.arg("path")));web.send(ok?200:400,"text/plain",ok?"created":"mkdir failed");}
+File uploadFile;
+void handleSDUpload(){if(!web.authenticate("ralph",cfg.key.c_str()))return;HTTPUpload &u=web.upload();if(u.status==UPLOAD_FILE_START){String p=safePath(web.hasArg("path")?web.arg("path"):"/")+"/"+u.filename;p.replace("//","/");uploadFile=SD_MMC.open(p,FILE_WRITE);}else if(u.status==UPLOAD_FILE_WRITE){if(uploadFile)uploadFile.write(u.buf,u.currentSize);}else if(u.status==UPLOAD_FILE_END){if(uploadFile)uploadFile.close();}}
+void apiSettingsGet(){if(!webAuth())return;String j="{\"name\":\""+jsonEscape(cfg.name)+"\",\"owner\":\""+jsonEscape(cfg.owner)+"\",\"house\":\""+jsonEscape(cfg.house)+"\",\"personality\":\""+jsonEscape(cfg.personality)+"\",\"wifiSSID\":\""+jsonEscape(cfg.wifiSSID)+"\",\"wifiEnabled\":"+String(cfg.wifiEnabled?"true":"false")+",\"updateChannel\":\""+cfg.updateChannel+"\",\"deviceId\":\""+cfg.deviceId+"\"}";web.send(200,"application/json",j);}
+void apiSettingsPost(){if(!webAuth())return;if(web.hasArg("name"))cfg.name=web.arg("name");if(web.hasArg("owner"))cfg.owner=web.arg("owner");if(web.hasArg("house"))cfg.house=web.arg("house");if(web.hasArg("personality"))cfg.personality=web.arg("personality");if(web.hasArg("updateChannel"))cfg.updateChannel=web.arg("updateChannel");if(web.hasArg("wifiSSID"))cfg.wifiSSID=web.arg("wifiSSID");if(web.hasArg("wifiPass"))cfg.wifiPass=web.arg("wifiPass");if(web.hasArg("wifiEnabled"))cfg.wifiEnabled=web.arg("wifiEnabled")=="1";save();connectWiFi();web.send(200,"text/plain","saved");}
+const char RALPH_WEB_HTML[] PROGMEM=R"rawliteral(<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1"><title>Ralph</title><style>body{font-family:system-ui;margin:0;background:#111;color:#eee}header{padding:18px;background:#202020;position:sticky;top:0}main{padding:14px;max-width:900px;margin:auto}.card{background:#1d1d1d;border-radius:14px;padding:14px;margin:10px 0}button,input,select{padding:9px;margin:3px;border-radius:8px;border:1px solid #555;background:#222;color:#fff}.file{display:flex;justify-content:space-between;border-bottom:1px solid #333;padding:9px}</style></head><body><header><b>Ralph control</b></header><main><div class=card><h3>Device</h3><div id=info>Loading...</div></div><div class=card><h3>Settings</h3><input id=name placeholder=Name><input id=owner placeholder=Owner><input id=house placeholder=House><input id=personality placeholder=Personality><br><input id=ssid placeholder="WiFi SSID"><input id=pass type=password placeholder="WiFi password"><select id=channel><option>stable</option><option>beta</option></select><label><input id=wen type=checkbox> WiFi enabled</label><button onclick=save()>Save</button></div><div class=card><h3>SD files</h3><div id=path>/</div><button onclick=up()>Up</button><input type=file id=file><button onclick=upload()>Upload</button><button onclick=mk()>New folder</button><div id=files></div></div><div class=card><h3>Updates</h3><button onclick=upd()>Check for update now</button><span id=upmsg></span></div><script>
+let path="/";async function api(u,o){return fetch(u,o)}async function load(){let s=await(await api("/api/status")).json();info.innerHTML="<b>"+s.name+"</b><br>Device: "+s.deviceId+"<br>Registered: "+s.registered+"<br>WiFi: "+(s.wifi?"connected":"offline")+" "+s.ip+"<br>Version: "+s.version+" ("+s.channel+")";let x=await(await api("/api/settings")).json();name.value=x.name;owner.value=x.owner;house.value=x.house;personality.value=x.personality;ssid.value=x.wifiSSID;wen.checked=x.wifiEnabled;channel.value=x.updateChannel;filesLoad()}async function save(){let q=new URLSearchParams({name:name.value,owner:owner.value,house:house.value,personality:personality.value,wifiSSID:ssid.value,wifiPass:pass.value,wifiEnabled:wen.checked?"1":"0",updateChannel:channel.value});await api("/api/settings",{method:"POST",body:q});load()}async function filesLoad(){document.getElementById("path").textContent=path;let a=await(await api("/api/files?path="+encodeURIComponent(path))).json();files.innerHTML=a.map(function(f){return "<div class=file>"+(f.dir?"<button onclick='cd("+JSON.stringify(f.name)+")'>[DIR] "+f.name+"</button>":"<a href='/api/download?path="+encodeURIComponent(f.name)+"'>"+f.name+"</a>")+"<span>"+f.size+" B "+(f.dir?"":"<button onclick='del("+JSON.stringify(f.name)+")'>Delete</button>")+"</span></div>"}).join("")}function cd(n){path=(path.endsWith("/")?path:path+"/")+n;filesLoad()}function up(){if(path!="/"){path=path.split("/").slice(0,-1).join("/")||"/";filesLoad()}}async function del(n){await api("/api/delete?path="+encodeURIComponent(path+(path.endsWith("/")?"":"/")+n),{method:"POST"});filesLoad()}async function upload(){if(!file.files[0])return;let fd=new FormData();fd.append("file",file.files[0]);await api("/api/upload?path="+encodeURIComponent(path),{method:"POST",body:fd});filesLoad()}async function mk(){let n=prompt("Folder name");if(n){await api("/api/mkdir?path="+encodeURIComponent(path+"/"+n),{method:"POST"});filesLoad()}}async function upd(){upmsg.textContent=" checking...";let r=await api("/api/update",{method:"POST"});upmsg.textContent=" "+await r.text()}load();
+</script></main></body></html>)rawliteral";
+void webRoot(){if(!webAuth())return;web.send_P(200,"text/html",RALPH_WEB_HTML);}
+void startWeb(){if(!wifiOK||webStarted)return;web.on("/",HTTP_GET,webRoot);web.on("/api/status",HTTP_GET,apiStatus);web.on("/api/files",HTTP_GET,apiFiles);web.on("/api/download",HTTP_GET,apiDownload);web.on("/api/delete",HTTP_POST,apiDelete);web.on("/api/move",HTTP_POST,apiMove);web.on("/api/mkdir",HTTP_POST,apiMkdir);web.on("/api/settings",HTTP_GET,apiSettingsGet);web.on("/api/settings",HTTP_POST,apiSettingsPost);web.on("/api/upload",HTTP_POST,[](){web.send(200,"text/plain","uploaded");},handleSDUpload);web.on("/api/update",HTTP_POST,[](){if(!webAuth())return;checkGitHubUpdate();web.send(200,"text/plain","update checked");});web.begin();webStarted=true;}
+bool parseManifest(String body,String key,String &out){int p=body.indexOf(key+"=");if(p<0)return false;p+=key.length()+1;int e=body.indexOf("\n",p);if(e<0)e=body.length();out=body.substring(p,e);out.trim();return true;}
+void checkGitHubUpdate(){if(!wifiOK)return;WiFiClientSecure client;client.setInsecure();HTTPClient h;if(!h.begin(client,UPDATE_MANIFEST))return;int code=h.GET();if(code!=200){h.end();return;}String body=h.getString(),ver,fw;parseManifest(body,"VERSION",ver);parseManifest(body,"FIRMWARE",fw);h.end();if(ver.length()&&versionNumber(ver)>versionNumber(cfg.installedVersion)&&fw.length()){WiFiClientSecure fc;fc.setInsecure();HTTPClient f;if(f.begin(fc,fw)&&f.GET()==200){int len=f.getSize();if(Update.begin(len>0?len:UPDATE_SIZE_UNKNOWN)){Update.writeStream(f.getStream());if(Update.end(true)){cfg.installedVersion=ver;save();delay(500);ESP.restart();}}}f.end();}}
+void periodicUpdateCheck(){if(wifiOK&&millis()-lastUpdateCheck>UPDATE_CHECK_MS){lastUpdateCheck=millis();checkGitHubUpdate();}}
 class SC:public BLEServerCallbacks{void onConnect(BLEServer*){bleConnected=true;}void onDisconnect(BLEServer*s){bleConnected=false;s->getAdvertising()->start();}};
 class RC:public BLECharacteristicCallbacks{void onWrite(BLECharacteristic*c){std::string v=c->getValue();if(v.length())command(String(v.c_str()));}};
 
@@ -318,5 +357,5 @@ void anim(){
   }
 }
 
-void setup(){Serial.begin(115200);pinMode(BRAKE_LED_PIN,OUTPUT);brake(false);lcd.init();lcd.backlight();for(int i=0;i<8;i++)lcd.createChar(i,(uint8_t*)RALPH_CHARS[i]);screen("RALPH","booting...");sdOK=SD_MMC.begin("/sdcard",true);if(sdOK){SD_MMC.mkdir("/RALPH");SD_MMC.mkdir("/RALPH/AI");load();}if(!cfg.key.length()){cfg.key=makeKey();save();}mpuOK=initMPU();lastMove=millis();ble();temp();if(!cfg.complete){state=SETUP_MODE;brake(false);screen("SETUP KEY",cfg.key);}else{state=AWAKE;brake(true);screen("Hi! I'm Ralph",cfg.house);}}
-void loop(){mpu();temp();if(cfg.complete&&state!=SLEEPING&&millis()-lastMove>=SLEEP_AFTER_MS){state=SLEEPING;brake(false);}if(state==FALLEN&&az>.65&&fabs(ax)<.65&&fabs(ay)<.65){state=WAKING;stateUntil=millis()+1800;brake(true);}if(millis()-lastMove>1000)shake*=.92f;anim();delay(5);}
+void setup(){Serial.begin(115200);pinMode(BRAKE_LED_PIN,OUTPUT);brake(false);lcd.init();lcd.backlight();for(int i=0;i<8;i++)lcd.createChar(i,(uint8_t*)RALPH_CHARS[i]);screen("RALPH","booting...");sdOK=SD_MMC.begin("/sdcard",true);if(sdOK){SD_MMC.mkdir("/RALPH");SD_MMC.mkdir("/RALPH/AI");load();}if(!cfg.key.length()){cfg.key=makeKey();save();}if(!cfg.deviceId.length()){cfg.deviceId=makeDeviceId();save();}mpuOK=initMPU();lastMove=millis();ble();temp();connectWiFi();startWeb();if(!cfg.complete){state=SETUP_MODE;brake(false);screen("SETUP KEY",cfg.key);}else{state=AWAKE;brake(true);screen("Hi! I'm Ralph",cfg.house);}}
+void loop(){mpu();temp();if(wifiOK)web.handleClient();periodicUpdateCheck();if(cfg.complete&&state!=SLEEPING&&millis()-lastMove>=SLEEP_AFTER_MS){state=SLEEPING;brake(false);}if(state==FALLEN&&az>.65&&fabs(ax)<.65&&fabs(ay)<.65){state=WAKING;stateUntil=millis()+1800;brake(true);}if(millis()-lastMove>1000)shake*=.92f;anim();delay(5);}
