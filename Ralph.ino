@@ -67,7 +67,24 @@ class RC:public BLECharacteristicCallbacks{void onWrite(BLECharacteristic*c){std
 
 void ble(){BLEDevice::init("Ralph-ESP32");BLEServer*s=BLEDevice::createServer();s->setCallbacks(new SC());BLEService*sv=s->createService("7f6c0001-9f42-4e9b-8d11-72616c706800");auto*rx=sv->createCharacteristic("7f6c0002-9f42-4e9b-8d11-72616c706800",BLECharacteristic::PROPERTY_WRITE|BLECharacteristic::PROPERTY_WRITE_NR);rx->setCallbacks(new RC());tx=sv->createCharacteristic("7f6c0003-9f42-4e9b-8d11-72616c706800",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_NOTIFY);tx->addDescriptor(new BLE2902());sv->start();s->getAdvertising()->start();}
 
-void anim(){if(!cfg.complete||state==SETUP_MODE){if(millis()-lastFrame>500){lastFrame=millis();screen("Ralph setup",cfg.key);}return;}if(state==SLEEPING){if(millis()-lastFrame>1000){lastFrame=millis();screen("      zZz","    sleep...");}return;}if(millis()-lastFrame<300)return;lastFrame=millis();frame++;lcd.clear();if(state==DIZZY){screen("@_@  DIZZY!"," HOUSE JUMP!");}else if(state==FALLEN){screen("Ralph fell!","    o__");}else if(state==WAKING){screen("Huh...?", "I'm awake!");}else{if(shake>.75&&millis()-lastMove<1000)houseJump=(frame%3)-1;else houseJump=0;int x=9+houseJump;if(x<0)x=0;if(x>14)x=14;lcd.setCursor(1,0);lcd.write(frame%4);lcd.setCursor(2,0);lcd.write((frame+1)%4);lcd.setCursor(5,0);lcd.print(String(tempF,0)+"F");lcd.setCursor(x,1);lcd.write(4);lcd.setCursor(x+1,1);lcd.write(5);}if((state==DIZZY||state==FALLEN||state==WAKING||state==TALKING)&&millis()>=stateUntil){state=AWAKE;brake(true);}}
-
+void drawAnimation(uint8_t id,uint8_t f){screen(String(RALPH_ANIMATIONS[id][f]));}
+void anim(){
+if(!cfg.complete||state==SETUP_MODE){if(millis()-lastFrame>500){lastFrame=millis();screen("Ralph setup",cfg.key);}return;}
+if(state==SLEEPING){if(millis()-lastFrame>1000){lastFrame=millis();screen("      zZz","    sleep...");}return;}
+if(millis()-lastFrame<300)return;
+lastFrame=millis();
+frame=(frame+1)%3;
+if(state==DIZZY){drawAnimation(46,frame);}
+else if(state==FALLEN){drawAnimation(40,frame);}
+else if(state==WAKING){drawAnimation(39,frame);}
+else if(state==TALKING){drawAnimation(8,frame);}
+else {
+static uint8_t idleAnim=0;
+static uint32_t nextAnim=0;
+if(millis()>=nextAnim){idleAnim=esp_random()%RALPH_ANIMATION_COUNT;nextAnim=millis()+4500;}
+drawAnimation(idleAnim,frame);
+}
+if((state==DIZZY||state==FALLEN||state==WAKING||state==TALKING)&&millis()>=stateUntil){state=AWAKE;brake(true);}
+}
 void setup(){Serial.begin(115200);pinMode(BRAKE_LED_PIN,OUTPUT);brake(false);lcd.init();lcd.backlight();for(int i=0;i<8;i++)lcd.createChar(i,(uint8_t*)RALPH_CHARS[i]);screen("RALPH","booting...");sdOK=SD_MMC.begin("/sdcard",true);if(sdOK){SD_MMC.mkdir("/RALPH");SD_MMC.mkdir("/RALPH/AI");load();}if(!cfg.key.length()){cfg.key=makeKey();save();}mpuOK=initMPU();lastMove=millis();ble();temp();if(!cfg.complete){state=SETUP_MODE;brake(false);screen("SETUP KEY",cfg.key);}else{state=AWAKE;brake(true);screen("Hi! I'm Ralph",cfg.house);}}
 void loop(){mpu();temp();if(cfg.complete&&state!=SLEEPING&&millis()-lastMove>=SLEEP_AFTER_MS){state=SLEEPING;brake(false);}if(state==FALLEN&&az>.65&&fabs(ax)<.65&&fabs(ay)<.65){state=WAKING;stateUntil=millis()+1800;brake(true);}if(millis()-lastMove>1000)shake*=.92f;anim();delay(5);}
