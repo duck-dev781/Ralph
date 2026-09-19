@@ -1,2 +1,2 @@
-This folder is the firmware portion of an update package.
-The ESP32 cannot flash an .ino source file directly. GitHub Actions compiles Ralph.ino into Ralph-OTA.bin and places the binary here when a release package is built.
+This folder contains firmware for the Ralph update package.
+The ESP32 does not execute an .ino source file. GitHub Actions compiles Ralph.ino into a binary, and Ralph uses that binary for OTA firmware updates.
