@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ralph BLE Setup</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:720px;margin:30px auto;padding:20px;background:#111;color:#eee}
+section{border:1px solid #444;border-radius:12px;padding:16px;margin:14px 0}
+input,button,select{font:inherit;padding:9px;margin:5px 0;border-radius:7px;border:1px solid #666}
+input{width:95%;background:#222;color:#fff}button{cursor:pointer}
+#log{white-space:pre-wrap;background:#080808;padding:12px;border-radius:8px;min-height:80px}
+</style>
+</head>
+<body>
+<h1>Ralph BLE Setup</h1>
+<p>Connect this page to Ralph-ESP32 using Chrome Web Bluetooth.</p>
+
+<section>
+<button id="connect">Connect to Ralph</button>
+<button id="disconnect" disabled>Disconnect</button>
+<p id="status">Disconnected</p>
+</section>
+
+<section>
+<h2>Setup</h2>
+<input id="key" placeholder="Setup key">
+<button onclick="send('SETUP '+v('key'))">Activate / Setup</button>
+</section>
+
+<section>
+<h2>Settings</h2>
+<input id="name" placeholder="Ralph's name">
+<input id="owner" placeholder="Owner">
+<input id="house" placeholder="House">
+<input id="personality" placeholder="Personality">
+<button onclick="send('NAME '+v('name'))">Set Name</button>
+<button onclick="send('OWNER '+v('owner'))">Set Owner</button>
+<button onclick="send('HOUSE '+v('house'))">Set House</button>
+<button onclick="send('PERSONALITY '+v('personality'))">Set Personality</button>
+</section>
+
+<section>
+<h2>Wi-Fi</h2>
+<input id="ssid" placeholder="Wi-Fi SSID">
+<input id="pass" type="password" placeholder="Wi-Fi password">
+<button onclick="send('WIFI_SSID '+v('ssid'))">Set SSID</button>
+<button onclick="send('WIFI_PASS '+v('pass'))">Set Password</button>
+<button onclick="send('WIFI_ON')">Enable Wi-Fi</button>
+<button onclick="send('WIFI_OFF')">Disable Wi-Fi</button>
+</section>
+
+<section>
+<h2>Ralph</h2>
+<input id="chat" placeholder="Say something to Ralph">
+<button onclick="send(v('chat'))">Chat</button>
+<button onclick="send('STATUS')">Status</button>
+<button onclick="send('NAME')">Read Name</button>
+<button onclick="send('OWNER')">Read Owner</button>
+<button onclick="send('HOUSE')">Read House</button>
+<button onclick="send('PERSONALITY')">Read Personality</button>
+<button onclick="send('SLEEP')">Sleep</button>
+<button onclick="send('WAKE')">Wake</button>
+<button onclick="send('UPDATE')">Check for Updates</button>
+</section>
+
+<section>
+<h2>BLE Log</h2>
+<div id="log"></div>
+</section>
+
+<script>
+const SERVICE='7f6c0001-9f42-4e9b-8d11-72616c706800';
+const RX='7f6c0002-9f42-4e9b-8d11-72616c706800';
+const TX='7f6c0003-9f42-4e9b-8d11-72616c706800';
+let device=null,rxChar=null,txChar=null;
+const $=id=>document.getElementById(id);
+const v=id=>$(id).value.trim();
+function log(s){$('log').textContent+=s+'\n';$('log').scrollTop=$('log').scrollHeight;}
+function setStatus(s){$('status').textContent=s;}
+async function connect(){
+ try{
+  device=await navigator.bluetooth.requestDevice({filters:[{name:'Ralph-ESP32'}],optionalServices:[SERVICE]});
+  device.addEventListener('gattserverdisconnected',()=>{setStatus('Disconnected');$('disconnect').disabled=true;});
+  const server=await device.gatt.connect();
+  const service=await server.getPrimaryService(SERVICE);
+  rxChar=await service.getCharacteristic(RX);
+  txChar=await service.getCharacteristic(TX);
+  await txChar.startNotifications();
+  txChar.addEventListener('characteristicvaluechanged',e=>{
+   log('Ralph: '+new TextDecoder().decode(e.target.value));
+  });
+  setStatus('Connected to '+device.name);
+  $('disconnect').disabled=false;
+  log('Connected.');
+ }catch(e){log('ERROR: '+e.message);setStatus('Connection failed');}
+}
+async function send(text){
+ if(!rxChar){log('Not connected.');return;}
+ if(!text){return;}
+ try{
+  await rxChar.writeValue(new TextEncoder().encode(text));
+  log('You: '+text);
+ }catch(e){log('SEND ERROR: '+e.message);}
+}
+$('connect').onclick=connect;
+$('disconnect').onclick=()=>{if(device&&device.gatt.connected)device.gatt.disconnect();setStatus('Disconnected');$('disconnect').disabled=true;};
+if(!navigator.bluetooth)log('Web Bluetooth is not available in this browser.');
+</script>
+</body>
+</html>
