@@ -25,7 +25,7 @@ enum State { SETUP_MODE, AWAKE, TALKING, DIZZY, FALLEN, SLEEPING, WAKING };
 State state=SETUP_MODE;
 
 struct Settings {
-  String name="Ralph", owner="", house="Tiny House", personality="friendly", key="";
+  String name="Ralph", owner="", house="Tiny House", personality="grumpy", key="";
   bool complete=false;
 } cfg;
 
