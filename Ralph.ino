@@ -173,6 +173,17 @@ void makeRalphTiles(uint8_t id,uint8_t f){
     case 47: dizzy=true;break;
     case 48: armL=armR=(f!=1);break;
     case 49: armL=armR=true;angry=true;break;
+    case 69: armR=(f!=1);break;
+    case 70: armL=(f!=1);break;
+    case 71: smile=true;armL=(f==1);break;
+    case 72: smile=true;up=(f==1);break;
+    case 73: wink=(f==1);armR=true;break;
+    case 74: smile=true;armL=armR=true;break;
+    case 75: openMouth=(f!=1);armL=true;break;
+    case 76: sleep=(f!=1);wink=(f==1);break;
+    case 77: armL=armR=(f!=1);up=(f==1);break;
+    case 78: frown=(f==1);openMouth=(f==2);break;
+    case 79: sleep=(f!=1);wink=(f==1);break;
     default: smile=true;
   }
 
